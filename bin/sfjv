@@ -1,0 +1,161 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use utf8;
+
+use Data::Dumper; # debug
+
+use POSIX qw(setlocale LC_ALL);
+
+#use App::StarfishJV;
+
+use JSON;
+use Try::Tiny;
+use Glib ('TRUE','FALSE');
+use Gtk3 -init;
+
+
+
+setlocale(LC_ALL, '');
+
+my $jsonfile = $ARGV[0];
+
+my $window = Gtk3::Window->new('toplevel');
+$window->set_title('Starfish JSON Viewer');
+$window->signal_connect(destroy => sub { Gtk3::main_quit });
+
+#my $paned = Gtk3::Paned->new('horizontal');
+
+my $json_tree = Gtk3::TreeView->new();
+
+my $jt_store = Gtk3::TreeStore->new('Glib::String', 'Glib::String');
+$json_tree->set_model($jt_store);
+
+my $crenderer_0 = Gtk3::CellRendererText->new();
+my $column_0 = Gtk3::TreeViewColumn->new_with_attributes('JSON', $crenderer_0, 'text' => 0);
+$json_tree->append_column($column_0);
+
+my $crenderer_1 = Gtk3::CellRendererText->new();
+my $column_1 = Gtk3::TreeViewColumn->new_with_attributes('value', $crenderer_1, 'text' => 1);
+$json_tree->append_column($column_1);
+
+my $json_tree_sw = Gtk3::ScrolledWindow->new();
+$json_tree_sw->add_with_viewport($json_tree);
+
+#$paned->add1($json_tree_sw);
+
+#my $ed_table = Gtk3::Table->new(2, 2, 'TRUE');
+#$paned->add2($ed_table);
+
+$window->add($json_tree_sw);
+
+$window->show_all;
+
+
+if (defined($jsonfile)) {
+    Glib::Timeout->add(1, \&_show_json_from_file, $jsonfile);
+}
+
+
+Gtk3::main;
+
+
+
+sub _show_json_from_file {
+    my $jsonfile = shift;
+
+    my $json = try {
+        _load_json_from_file($jsonfile)
+    }
+    catch {
+        $_ = $1
+            if $_ =~ m{^(.*)\s+at\s.*line\s\d+.}xms;
+
+        _alert($window, $_);
+    };
+    return
+        unless defined($json);
+
+    _render_json($json);
+
+    return FALSE;
+}
+
+
+sub _load_json_from_file {
+    my $jsonfile = shift;
+
+    open(my $fh, '<', $jsonfile) or
+        die("Can't open file '$jsonfile': $!\n");
+
+    local $/; # slurp
+    return decode_json(<$fh>);
+}
+
+
+
+sub _render_json {
+    my $json = shift;
+    my $json_ref = ref($json);
+
+    _render_json_el($json, $json_ref eq 'HASH' ?'object' :'array');
+}
+
+
+sub _render_json_el {
+    my $el = shift;
+    my $el_name = shift;
+    my $p_iter = shift;
+
+    my $el_ref = ref($el);
+
+    if ($el_ref eq 'HASH') {
+        my @keys = keys(%$el);
+        my $iter = $jt_store->append($p_iter);
+        $jt_store->set($iter, 0 => $el_name.' {'.scalar(@keys).'}');
+
+        for (@keys) {
+            _render_json_el($el->{$_}, $_, $iter);
+        }
+    }
+    elsif ($el_ref eq 'ARRAY') {
+        my $size = scalar(@$el); 
+        my $iter = $jt_store->append($p_iter);
+        $jt_store->set($iter, 0 => $el_name.' ['.$size.']');
+
+        for (my $i=0; $i<$size; ++$i) {
+            _render_json_el($el->[$i], $i, $iter);
+        }
+    }
+    elsif ($el_ref eq 'JSON::PP::Boolean') {
+        my $iter = $jt_store->append($p_iter);
+        $jt_store->set($iter, 0 => $el_name.': ');
+        $jt_store->set($iter, 1 => (0 == $el ?'false' :'true'));
+    }
+    elsif ($el_ref eq '') {
+        my $iter = $jt_store->append($p_iter);
+        $jt_store->set($iter, 0 => $el_name.': ');
+        $jt_store->set($iter, 1 => (defined($el) ?$el :'null'));
+    }
+}
+
+
+
+sub _alert {
+    my $w = shift;
+    my $msg = shift;
+
+    my $_alert = Gtk3::MessageDialog->new(
+        $w,
+        'modal',
+        'error',
+        'ok',
+        $msg
+    );
+    $_alert->signal_connect('response' => sub {
+        $_alert->destroy();
+    });
+    $_alert->show();
+}
